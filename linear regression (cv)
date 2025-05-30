@@ -1,0 +1,99 @@
+import pandas as pd
+import numpy as np
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import KFold, cross_val_predict
+from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
+from joblib import Parallel, delayed
+
+# File paths
+features_file = r"C:\Users\Administrator\Desktop\dataforcode\sent2(GYr).xlsx"
+targets_file = r"C:\Users\Administrator\Desktop\code\band to band\sentinel 2\sparameters.csv"
+output_path = r"C:\Users\Administrator\Desktop\code\band to parameter\sbp_lr.parquet"
+
+# Load data
+df_targets = pd.read_csv(targets_file)
+df_targets.columns = df_targets.columns.str.strip()
+
+df_features_all = pd.read_excel(features_file)
+df_features_all.columns = df_features_all.columns.str.strip()
+
+block_size = 100
+threshold = 0.3
+n_jobs = 6  # Number of parallel jobs
+
+def evaluate_pair(feature, target, X, y):
+    """Evaluate one (feature, target) pair using 5-fold CV and return metrics including SMAPE."""
+    model = LinearRegression()
+    kf = KFold(n_splits=5, shuffle=True, random_state=42)
+
+    try:
+        # Cross-validated predictions
+        y_pred = cross_val_predict(model, X, y, cv=kf, n_jobs=1)
+
+        # Metrics
+        r2 = r2_score(y, y_pred)
+        rmse = np.sqrt(mean_squared_error(y, y_pred))
+        mae = mean_absolute_error(y, y_pred)
+        mean_obs = np.mean(y)
+        nse = 1 - (np.sum((y - y_pred) ** 2) / np.sum((y - mean_obs) ** 2))
+
+        # SMAPE calculation (safe for zeros in y)
+        denominator = (np.abs(y) + np.abs(y_pred)) / 2
+        nonzero_mask = denominator != 0
+        smape = np.mean(np.abs(y[nonzero_mask] - y_pred[nonzero_mask]) / denominator[nonzero_mask]) * 100
+
+        # Fit model on full data to get slope and intercept
+        model.fit(X, y)
+        slope = model.coef_[0]
+        intercept = model.intercept_
+
+        return {
+            'Feature': feature,
+            'Target': target,
+            'Correlation': np.corrcoef(X.squeeze(), y)[0, 1],
+            'Slope': slope,
+            'Intercept': intercept,
+            'R_squared': r2,
+            'RMSE': rmse,
+            'MAE': mae,
+            'SMAPE (%)': smape,
+            'NSE': nse
+        }
+    except Exception as e:
+        print(f"Error for {feature}-{target}: {e}")
+        return None
+
+results = []
+
+for start in range(0, df_features_all.shape[1], block_size):
+    end = min(start + block_size, df_features_all.shape[1])
+    df_features = df_features_all.iloc[:, start:end]
+    print(f"\nProcessing block: {start} to {end}")
+
+    tasks = []
+
+    for feature in df_features.columns:
+        for target in df_targets.columns:
+            # Drop rows with NaNs for current pair
+            data = pd.concat([df_features[feature], df_targets[target]], axis=1).dropna()
+            if data.shape[0] < 10:
+                continue
+
+            corr = np.corrcoef(data[feature], data[target])[0, 1]
+            if np.abs(corr) < threshold:
+                continue
+
+            X = data[[feature]].values
+            y = data[target].values
+
+            tasks.append(delayed(evaluate_pair)(feature, target, X, y))
+
+    # Run tasks in parallel
+    block_results = Parallel(n_jobs=n_jobs)(tasks)
+    block_results = [res for res in block_results if res is not None]
+    results.extend(block_results)
+
+# Save final results
+results_df = pd.DataFrame(results)
+results_df.to_parquet(output_path, index=False)
+print(f"\nResults saved to: {output_path}")
