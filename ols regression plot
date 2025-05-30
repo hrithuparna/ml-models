@@ -1,0 +1,66 @@
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+import os
+import re
+
+# Load CSV files
+models_df = pd.read_csv(r"C:\Users\Administrator\Desktop\code\band to parameter\linear regression\linear regression sentinel\srp_lr.csv")
+variables_df = pd.read_csv(r"C:\Users\Administrator\Desktop\code\band to band\sentinel 2\sentinel_bandratios_ratios.csv")
+y_values_df = pd.read_csv(r"C:\Users\Administrator\Desktop\code\band to band\sentinel 2\sparameters.csv")
+
+# Directory to save plots
+os.makedirs("regression_plots", exist_ok=True)
+
+def safe_filename(name):
+    """Sanitize filename to be OS-safe."""
+    return re.sub(r'[^\w\-_.]', '_', str(name))
+
+# Iterate over each model
+for index, row in models_df.iterrows():
+    feature = row['Feature']
+    target = row['Target']
+    slope = row['Slope']
+    intercept = row['Intercept']
+    r_squared = row.get('R_squared', None)
+    rmse = row.get('RMSE', None)
+
+    if feature not in variables_df.columns or target not in y_values_df.columns:
+        print(f"Skipping model {index}: '{feature}' or '{target}' not found.")
+        continue
+
+    # Extract data
+    x = variables_df[feature].dropna()
+    y = y_values_df[target].dropna()
+    if len(x) != len(y):
+        print(f"Skipping model {index}: mismatched x and y lengths.")
+        continue
+
+    # Compute regression line
+    x_line = np.linspace(x.min(), x.max(), 100)
+    y_line = slope * x_line + intercept
+
+    # Plot
+    plt.figure(figsize=(8, 6))
+    plt.scatter(x, y, alpha=0.7, color='blue', label='Actual Data')
+    plt.plot(x_line, y_line, color='red', label='Regression Line')
+    plt.title(f"{target} vs {feature}")
+    plt.xlabel(feature)
+    plt.ylabel(target)
+    plt.grid(True)
+    plt.legend()
+
+    # Annotation with metrics
+    annotation = f"Slope: {slope:.3f}\nIntercept: {intercept:.3f}"
+    if r_squared is not None:
+        annotation += f"\nR²: {r_squared:.3f}"
+    if rmse is not None:
+        annotation += f"\nRMSE: {rmse:.3f}"
+    plt.text(0.05, 0.95, annotation, transform=plt.gca().transAxes,
+             verticalalignment='top', bbox=dict(facecolor='white', alpha=0.6))
+
+    # Save
+    plot_filename = f"regression_plots/{safe_filename(target)}_vs_{safe_filename(feature)}.png"
+    plt.savefig(plot_filename, bbox_inches='tight')
+    plt.close()
+    print(f"Saved plot: {plot_filename}")
